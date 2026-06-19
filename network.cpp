@@ -14,6 +14,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "cmd.h"
 #include "dispatcher.h"
 #include "cluster.h"
@@ -179,7 +180,8 @@ bool handle_read(Client &c) {
         size_t cmd_start = c.parser.cursor;
         if (!c.parser.next(cmd)) break;
         strv raw(c.parser.buffer.data() + cmd_start, c.parser.cursor - cmd_start);
-        appendAOF(raw);
+        if (is_write_command(cmd.type))
+            appendAOF(raw);
         dispatcher.dispatch(c, cmd);
     }
     c.parser.clear_consumed();
@@ -991,8 +993,12 @@ void run_background_tasks() {
         _exit(0);
     }
 
+    static int64_t last_rewrite_aof_size = 0;
     if (g_rewrite_pending.exchange(false)) {
         rewriteAOF();
+        struct stat st;
+        if (stat("append_only.aof", &st) == 0)
+            last_rewrite_aof_size = st.st_size;
     }
 
     static int64_t last_tick = 0;
@@ -1086,6 +1092,18 @@ void run_background_tasks() {
 
     flushAOF();
     expire_sweep();
+
+    // Auto-trigger AOF rewrite if file has grown to 2x last-rewrite size (min 64MB).
+    if (!g_rewrite_pending) {
+        struct stat st;
+        if (stat("append_only.aof", &st) == 0) {
+            if (last_rewrite_aof_size == 0)
+                last_rewrite_aof_size = st.st_size;
+            int64_t min_size = 64LL * 1024 * 1024;
+            if (st.st_size >= last_rewrite_aof_size * 2 && st.st_size > min_size)
+                g_rewrite_pending = true;
+        }
+    }
     reconnect_peers();
 
     // Connect to new peers discovered via gossip

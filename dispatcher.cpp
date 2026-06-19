@@ -65,7 +65,11 @@ static bool queue_replica(const str& raw_cmd, const std::vector<NodeID>& replica
             ids.push_back(r.id);
     if (ids.empty()) return false;
 
-    // Only defer if at least one peer is actually connected
+    // Only defer if at least one peer is actually connected.
+    // NOTE: When no replicas are reachable the write returns immediately to the
+    // client with +OK, silently weakening write_quorum guarantees. This is
+    // intentional for solo/dev use; for strict quorum a fail-fast policy could
+    // be added as a config option.
     bool any_connected = false;
     for (auto id : ids) {
         auto pit = peers_by_node_id.find(id);

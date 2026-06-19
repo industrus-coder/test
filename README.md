@@ -115,10 +115,4 @@ magic(4) | version(1) | type(1) | msg_id(8) | sender_id(8) | payload_len(4) | ch
 
 Frame types: GOSSIP_PING/PONG, REPLICATE_PUT/ACK/DEL, READ_REQUEST/RESPONSE, ANTIENTROPY_HASH/SYNC, CLUSTER_JOIN/ACK, PROXY_REQUEST/RESPONSE, FULL_SYNC_REQUEST/CHUNK
 
-## Performance
 
-Benchmark: `./build/DRedis` includes a built-in benchmark (PING only for now).
-```bash
-# Start server first, then:
-redis-benchmark -p 6379 -n 100000 -c 50 -t SET,GET,PING
-```

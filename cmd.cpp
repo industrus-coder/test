@@ -133,6 +133,7 @@ str handle_rename(const TOKENS &args) {
     ne.type = entry->type;
     ne.value = entry->value;
     ne.expiry_ms = entry->expiry_ms;
+    ne.VecClk = entry->VecClk;
     store_del(args[0]);
     store_set(args[1], std::move(ne));
     return RESP::ok();
