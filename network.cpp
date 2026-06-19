@@ -22,7 +22,7 @@
 #include "store.h"
 #include "merkle.h"
 
-constexpr size_t WRITE_BUF_BACKPRESSURE_THRESHOLD = 1024 * 1024;
+constexpr size_t WRITE_BUF_BACKPRESSURE_THRESHOLD = 4 * 1024 * 1024;
 constexpr int CLIENT_IDLE_TIMEOUT_MS = 300000; // 5 minutes
 constexpr int MAX_CLIENTS = 10000;
 
@@ -80,7 +80,7 @@ void mod_epoll(int fd, uint32_t events) {
 
 void close_client(int fd) {
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
-    std::cout << "[DREDIS]: Closing Client-> fd: " << fd << std::endl;
+    std::cout << "[DREDIS]: Closing Client-> fd: " << fd << " at " << current_time_ms() << std::endl;
     close(fd);
     clients.erase(fd);
 }
@@ -103,6 +103,8 @@ void accept_new_clients() {
 
         set_tcp_keepalive(client_fd);
         fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
+        int yes = 1;
+        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
         clients[client_fd] = {client_fd, {}, {}, false, current_time_ms(), false};
         std::cout << "\033[33m[DRedis] client connected (fd: " << client_fd << ")\033[0m" << std::endl;
         struct epoll_event ev{};
@@ -113,13 +115,18 @@ void accept_new_clients() {
 }
 
 bool handle_read(Client &c) {
-    char buf[4096];
+    char buf[65536];
 
 
     ssize_t n = read(c.fd, buf, sizeof(buf));
     if (n <= 0) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             return true;
+        // Flush pending writes before closing (TCP half-close)
+        if (!c.write_buf.empty()) {
+            ssize_t w = send(c.fd, c.write_buf.data(), c.write_buf.size(), MSG_NOSIGNAL);
+            if (w > 0) c.write_buf.erase(0, w);
+        }
         close_client(c.fd);
         return false;
     }
@@ -210,6 +217,7 @@ bool handle_write(Client &c) {
     }
 
     c.write_buf.erase(0, n);
+    c.last_active_ms = current_time_ms();
 
     if (c.read_paused_by_backpressure && c.write_buf.size() < WRITE_BUF_BACKPRESSURE_THRESHOLD / 2)
         c.read_paused_by_backpressure = false;
@@ -383,7 +391,6 @@ void process_bin_frame(const BIN::Frame &frame, uint64_t peer_node_id) {
             break;
         }
         case BIN::FrameType::REPLICATE_PUT: {
-            appendAOF(frame.payload);
             RESP::Parser p;
             p.feed(frame.payload);
             COMMAND cmd;
@@ -657,7 +664,9 @@ void process_bin_frame(const BIN::Frame &frame, uint64_t peer_node_id) {
                     auto local_cmp = compare_vclock(vclock, pr.local_vclock);
                     if (local_cmp == VClockCmp::NEWER) {
                         auto *existing = store_get(pr.key);
-                        if (existing && existing->type == Type::STRING && !response.empty() && response[0] == '$') {
+                        if (!existing || existing->type == Type::TOMBSTONE || response.empty()) {}
+                        else if (response[0] == '-') {} // error response — skip
+                        else if (existing->type == Type::STRING && response[0] == '$') {
                             auto cr = response.find("\r\n");
                             if (cr != str::npos && cr >= 1) {
                                 str len_str = response.substr(1, cr - 1);
@@ -675,6 +684,100 @@ void process_bin_frame(const BIN::Frame &frame, uint64_t peer_node_id) {
                                     g_replication_mode = saved;
                                 }
                             }
+                        } else if (response[0] == '*') {
+                            // HASH, SET, ZSET, LIST response — parse the array
+                            size_t cr = response.find("\r\n");
+                            if (cr == str::npos) break;
+                            char *end = nullptr;
+                            long long count = std::strtoll(response.data() + 1, &end, 10);
+                            if (end == response.data() + 1 || count <= 0) break;
+                            size_t pos = cr + 2;
+                            auto read_bulk = [&]() -> str {
+                                if (pos >= response.size() || response[pos] != '$') return {};
+                                size_t e = response.find("\r\n", pos);
+                                if (e == str::npos) return {};
+                                long long len = std::strtoll(response.data() + pos + 1, &end, 10);
+                                if (len < 0) { pos = e + 2; return {}; }
+                                size_t total = e + 2 + static_cast<size_t>(len) + 2;
+                                if (total > response.size()) return {};
+                                str val(response.data() + e + 2, static_cast<size_t>(len));
+                                pos = total;
+                                return val;
+                            };
+                            bool saved = g_replication_mode;
+                            g_replication_mode = true;
+                            ValueEntry repaired;
+                            repaired.VecClk = vclock;
+                            switch (existing->type) {
+                                case Type::HASH: {
+                                    if (count % 2 != 0) break;
+                                    std::unordered_map<str, str> map;
+                                    for (long long i = 0; i < count; i += 2) {
+                                        str k = read_bulk();
+                                        str v = read_bulk();
+                                        if (k.data() == nullptr || v.data() == nullptr) break;
+                                        map[k] = v;
+                                    }
+                                    if (map.size() * 2 == static_cast<size_t>(count)) {
+                                        repaired.type = Type::HASH;
+                                        repaired.value = std::move(map);
+                                        store_set(pr.key, std::move(repaired));
+                                    }
+                                    break;
+                                }
+                                case Type::SET: {
+                                    std::unordered_set<str> set;
+                                    for (long long i = 0; i < count; i++) {
+                                        str m = read_bulk();
+                                        if (m.data() == nullptr) break;
+                                        set.insert(m);
+                                    }
+                                    if (set.size() == static_cast<size_t>(count)) {
+                                        repaired.type = Type::SET;
+                                        repaired.value = std::move(set);
+                                        store_set(pr.key, std::move(repaired));
+                                    }
+                                    break;
+                                }
+                                case Type::LIST: {
+                                    std::deque<str> list;
+                                    for (long long i = 0; i < count; i++) {
+                                        str e = read_bulk();
+                                        if (e.data() == nullptr) break;
+                                        list.push_back(e);
+                                    }
+                                    if (list.size() == static_cast<size_t>(count)) {
+                                        repaired.type = Type::LIST;
+                                        repaired.value = std::move(list);
+                                        store_set(pr.key, std::move(repaired));
+                                    }
+                                    break;
+                                }
+                                case Type::ZSET: {
+                                    if (count % 2 != 0) break;
+                                    SortedSet zset;
+                                    bool ok = true;
+                                    for (long long i = 0; i < count; i += 2) {
+                                        str m = read_bulk();
+                                        str s = read_bulk();
+                                        if (m.data() == nullptr || s.data() == nullptr) { ok = false; break; }
+                                        char *s_end = nullptr;
+                                        double sc = std::strtod(s.c_str(), &s_end);
+                                        if (s_end == s.c_str()) { ok = false; break; }
+                                        zset.AVAILABLE[{sc, m}] = 1;
+                                        zset.SCORE[m] = sc;
+                                    }
+                                    if (ok && zset.AVAILABLE.size() * 2 == static_cast<size_t>(count)) {
+                                        repaired.type = Type::ZSET;
+                                        repaired.value = std::move(zset);
+                                        store_set(pr.key, std::move(repaired));
+                                    }
+                                    break;
+                                }
+                                default:
+                                    break;
+                            }
+                            g_replication_mode = saved;
                         }
                     }
                 }
@@ -892,19 +995,23 @@ void flush_replica_queue() {
         frame.payload = op.raw_command;
         auto serialized = BIN::serialize(frame);
 
-        if (op.client_fd >= 0 && !op.target_ids.empty()) {
-            int wq = std::min(config().write_quorum, static_cast<int>(op.target_ids.size()));
-            pending_writes[frame.header.msg_id] = {
-                op.deferred_response, op.client_fd, 0,
-                wq,
-                current_time_ms()
-            };
-        }
-
+        int connected_count = 0;
         for (auto id: op.target_ids) {
             auto it = peers_by_node_id.find(id);
-            if (it != peers_by_node_id.end() && it->second.fd >= 0)
+            if (it != peers_by_node_id.end() && it->second.fd >= 0) {
                 it->second.write_buf += serialized;
+                connected_count++;
+            }
+        }
+
+        if (op.client_fd >= 0 && !op.target_ids.empty()) {
+            int wq = std::min(config().write_quorum, static_cast<int>(op.target_ids.size()));
+            int target = std::min(wq, connected_count);
+            pending_writes[frame.header.msg_id] = {
+                op.deferred_response, op.client_fd, 0,
+                target,
+                current_time_ms()
+            };
         }
         replica_queue.pop_front();
     }
@@ -958,7 +1065,6 @@ void send_heartbeats() {
 void reconnect_peers() {
     auto now = current_time_ms();
     for (auto &[nid, peer]: peers_by_node_id) {
-        if (nid <= self_node.id) continue;
         if (peer.fd >= 0) continue;
         if (now < peer.retry_at) continue;
 
@@ -997,7 +1103,7 @@ void run_background_tasks() {
     if (g_rewrite_pending.exchange(false)) {
         rewriteAOF();
         struct stat st;
-        if (stat("append_only.aof", &st) == 0)
+        if (stat("data/append_only.aof", &st) == 0)
             last_rewrite_aof_size = st.st_size;
     }
 
@@ -1096,7 +1202,7 @@ void run_background_tasks() {
     // Auto-trigger AOF rewrite if file has grown to 2x last-rewrite size (min 64MB).
     if (!g_rewrite_pending) {
         struct stat st;
-        if (stat("append_only.aof", &st) == 0) {
+        if (stat("data/append_only.aof", &st) == 0) {
             if (last_rewrite_aof_size == 0)
                 last_rewrite_aof_size = st.st_size;
             int64_t min_size = 64LL * 1024 * 1024;

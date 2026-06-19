@@ -166,4 +166,18 @@ str handle_vclock(const TOKENS &args);
 
 str handle_bgrewriteaof(const TOKENS &args);
 
+str handle_quit(const TOKENS &args);
+
+str handle_hello(const TOKENS &args);
+
+str handle_auth(const TOKENS &args);
+
+str handle_select(const TOKENS &args);
+
+str handle_client(const TOKENS &args);
+
+str handle_replconf(const TOKENS &args);
+
+str handle_slaveof(const TOKENS &args);
+
 #endif

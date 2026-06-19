@@ -91,6 +91,11 @@ enum class commandType {
     LSET,
     VCLOCK,
     BGREWRITEAOF,
+    QUIT,
+    HELLO,
+    AUTH,
+    SELECT,
+    CLIENT,
     UNKNOWN
 };
 

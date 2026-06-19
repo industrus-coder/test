@@ -100,8 +100,8 @@ static void append_vclock_aof(const str& key) {
 }
 
 // Split concatenated RESP responses into individual elements
-// Handles Arrays (*count\r\n...), Bulk Strings ($-1\r\n or $len\r\n...\r\n),
-// Integers (:num\r\n), Simple Strings (+OK\r\n)
+// Handles Arrays (*count\r\n... or *-1\r\n), Bulk Strings ($-1\r\n or $len\r\n...\r\n),
+// Integers (:num\r\n), Simple Strings (+OK\r\n), Errors (-ERR\r\n)
 std::vector<str> split_resp_responses(const str& data) {
     std::vector<str> result;
     size_t pos = 0;
@@ -111,6 +111,12 @@ std::vector<str> split_resp_responses(const str& data) {
             size_t end = data.find("\r\n", pos);
             if (end == str::npos) break;
             int count = std::atoi(data.substr(pos + 1, end - pos - 1).c_str());
+            if (count < 0) {
+                // Null array (*-1\r\n)
+                result.push_back(data.substr(pos, end + 2 - pos));
+                pos = end + 2;
+                continue;
+            }
             pos = end + 2;
             for (int i = 0; i < count && pos < data.size(); i++) {
                 if (data[pos] == '$') {
@@ -136,6 +142,11 @@ std::vector<str> split_resp_responses(const str& data) {
                     if (e == str::npos) break;
                     result.push_back(data.substr(pos, e + 2 - pos));
                     pos = e + 2;
+                } else if (data[pos] == '-') {
+                    size_t e = data.find("\r\n", pos);
+                    if (e == str::npos) break;
+                    result.push_back(data.substr(pos, e + 2 - pos));
+                    pos = e + 2;
                 } else break;
             }
         } else if (data[pos] == '$') {
@@ -157,6 +168,11 @@ std::vector<str> split_resp_responses(const str& data) {
             result.push_back(data.substr(pos, end + 2 - pos));
             pos = end + 2;
         } else if (data[pos] == '+') {
+            size_t end = data.find("\r\n", pos);
+            if (end == str::npos) break;
+            result.push_back(data.substr(pos, end + 2 - pos));
+            pos = end + 2;
+        } else if (data[pos] == '-') {
             size_t end = data.find("\r\n", pos);
             if (end == str::npos) break;
             result.push_back(data.substr(pos, end + 2 - pos));

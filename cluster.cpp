@@ -235,13 +235,14 @@ std::string encode_gossip_payload() {
         const auto& node = candidates[i];
         auto it = cluster_state.find(node);
         uint8_t status_byte = it != cluster_state.end() ? static_cast<uint8_t>(it->second) : 0;
-        uint8_t ip_len = static_cast<uint8_t>(node.ip.size());
         uint64_t gen = node.generation;
         auto vit = node_versions.find(node.id);
         uint64_t ver = vit != node_versions.end() ? vit->second : 0;
+        uint16_t ip_len = static_cast<uint16_t>(node.ip.size());
+        uint16_t net_ip_len = htons(ip_len);
 
         payload.append(reinterpret_cast<const char*>(&node.id), sizeof(uint64_t));
-        payload.push_back(ip_len);
+        payload.append(reinterpret_cast<const char*>(&net_ip_len), sizeof(uint16_t));
         payload.append(node.ip);
         uint16_t net_port = htons(node.port);
         payload.append(reinterpret_cast<const char*>(&net_port), sizeof(uint16_t));
@@ -265,7 +266,11 @@ void apply_gossip_payload(std::string_view payload) {
         memcpy(&id, payload.data() + offset, sizeof(uint64_t));
         offset += sizeof(uint64_t);
 
-        uint8_t ip_len = static_cast<uint8_t>(payload[offset]); offset++;
+        if (offset + sizeof(uint16_t) > payload.size()) break;
+        uint16_t net_ip_len;
+        memcpy(&net_ip_len, payload.data() + offset, sizeof(uint16_t));
+        offset += sizeof(uint16_t);
+        uint16_t ip_len = ntohs(net_ip_len);
         if (offset + ip_len + sizeof(uint16_t) + 1 > payload.size()) break;
 
         std::string ip(payload.data() + offset, ip_len);
@@ -295,10 +300,17 @@ void apply_gossip_payload(std::string_view payload) {
         auto it = cluster_state.find(gossip_node);
         auto gossip_status = static_cast<NodeStatus>(status_byte);
 
-        // Version-based merge: only apply if incoming version > local known version
-        auto vit = node_versions.find(id);
-        uint64_t local_ver = vit != node_versions.end() ? vit->second : 0;
-        if (gossip_ver <= local_ver) continue;
+        // Stale generation — skip entirely
+        if (it != cluster_state.end() && gossip_gen < it->first.generation)
+            continue;
+
+        // Version check only applies for same generation or unknown nodes
+        // A higher generation always wins (covers restarted nodes with reset version)
+        if (it == cluster_state.end() || gossip_gen == it->first.generation) {
+            auto vit = node_versions.find(id);
+            uint64_t local_ver = vit != node_versions.end() ? vit->second : 0;
+            if (gossip_ver <= local_ver) continue;
+        }
 
         if (it == cluster_state.end()) {
             // Clean up any temp-ID entry for this address

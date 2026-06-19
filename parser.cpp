@@ -89,7 +89,12 @@ namespace {
         {"XADD", commandType::XADD},
         {"LSET", commandType::LSET},
         {"VCLOCK", commandType::VCLOCK},
-        {"BGREWRITEAOF", commandType::BGREWRITEAOF}
+        {"BGREWRITEAOF", commandType::BGREWRITEAOF},
+        {"QUIT", commandType::QUIT},
+        {"HELLO", commandType::HELLO},
+        {"AUTH", commandType::AUTH},
+        {"SELECT", commandType::SELECT},
+        {"CLIENT", commandType::CLIENT}
     };
 
     const std::unordered_map<commandType, std::string> type_to_name_table = [] {

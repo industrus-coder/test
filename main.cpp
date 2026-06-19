@@ -3,6 +3,7 @@
 #include <csignal>
 #include <fstream>
 #include <random>
+#include <sys/stat.h>
 #include "network.h"
 #include "cluster.h"
 #include "cmd.h"
@@ -24,7 +25,7 @@ extern "C" void shutdown_handler(int) {
 
 static void setup_node_identity(uint64_t &node_id, uint64_t &generation) {
     // Try reading node.id file for persistent identity + generation
-    std::ifstream id_file("node.id");
+    std::ifstream id_file("data/node.id");
     if (id_file.is_open()) {
         std::string line;
         if (std::getline(id_file, line)) node_id = std::stoull(line);
@@ -39,7 +40,7 @@ static void setup_node_identity(uint64_t &node_id, uint64_t &generation) {
     }
 
     // Persist node.id with generation
-    std::ofstream of("node.id");
+    std::ofstream of("data/node.id");
     if (of.is_open()) {
         of << node_id << "\n" << generation << "\n";
     }
@@ -81,6 +82,7 @@ static void setup_signal_handlers() {
 }
 
 int main() {
+    mkdir("data", 0755);
     init_cmd_map();
     load_config();
     configure_system();

@@ -1467,6 +1467,39 @@ str handle_vclock(const TOKENS &args) {
     return RESP::ok();
 }
 
+// ── Compatibility stubs ──
+
+str handle_quit(const TOKENS &) {
+    return RESP::ok();
+}
+
+str handle_hello(const TOKENS &) {
+    return RESP::array_raw({RESP::bulk_string("server"), RESP::bulk_string("redis"),
+                            RESP::bulk_string("version"), RESP::bulk_string("7.2.0"),
+                            RESP::bulk_string("proto"), RESP::integer(2),
+                            RESP::bulk_string("mode"), RESP::bulk_string("standalone")});
+}
+
+str handle_auth(const TOKENS &) {
+    return RESP::ok();
+}
+
+str handle_select(const TOKENS &) {
+    return RESP::ok();
+}
+
+str handle_client(const TOKENS &) {
+    return RESP::ok();
+}
+
+str handle_replconf(const TOKENS &) {
+    return RESP::ok();
+}
+
+str handle_slaveof(const TOKENS &) {
+    return RESP::ok();
+}
+
 str handle_bgrewriteaof(const TOKENS &args) {
     g_rewrite_pending.store(true);
     return RESP::simple_string("Background AOF rewrite scheduled");
@@ -1589,6 +1622,13 @@ void init_cmd_map() {
     cmd_map[commandType::CONFIG] = handle_config;
     cmd_map[commandType::VCLOCK] = handle_vclock;
     cmd_map[commandType::BGREWRITEAOF] = handle_bgrewriteaof;
+    cmd_map[commandType::QUIT] = handle_quit;
+    cmd_map[commandType::HELLO] = handle_hello;
+    cmd_map[commandType::AUTH] = handle_auth;
+    cmd_map[commandType::SELECT] = handle_select;
+    cmd_map[commandType::CLIENT] = handle_client;
+    cmd_map[commandType::REPLCONF] = handle_replconf;
+    cmd_map[commandType::SLAVEOF] = handle_slaveof;
     cmd_map[commandType::UNKNOWN] = handle_unknown;
 }
 

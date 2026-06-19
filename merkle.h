@@ -10,8 +10,8 @@ constexpr size_t MERKLE_TREE_DEPTH = 11;       // levels (0 = leaf, 10 = root)
 
 uint16_t get_slot(const Key& key);
 
-// Full Merkle tree — flat array, root at index MERKLE_TREE_NODES - 1,
-// leaves at indices [0, MERKLE_SLOTS - 1].
+// Full Merkle tree — flat array (standard heap), root at index 0,
+// leaves at indices [MERKLE_SLOTS - 1, MERKLE_TREE_NODES - 1].
 // Internal node i has children at 2*i+1 and 2*i+2.
 using MerkleTree = std::array<uint64_t, MERKLE_TREE_NODES>;
 

@@ -75,16 +75,17 @@ static str serialize_for_hash(const ValueEntry& entry) {
 
 MerkleTree compute_merkle_tree() {
     MerkleTree tree{};
-    // Compute leaf hashes (indices 0 to MERKLE_SLOTS - 1)
+    size_t leaf_base = MERKLE_SLOTS - 1;
+    // Compute leaf hashes (indices leaf_base to leaf_base + MERKLE_SLOTS - 1)
     for (const auto& [key, entry] : STORE) {
         // Include ALL entries (including tombstones) in Merkle hashes
         // to prevent key resurrection via anti-entropy
         uint16_t slot = get_slot(key);
         str data = key;
         data += serialize_for_hash(entry);
-        tree[slot] ^= crc32c_64(data.data(), data.size());
+        tree[leaf_base + slot] ^= crc32c_64(data.data(), data.size());
     }
-    // Build internal nodes bottom-up (heap layout: children at 2*i+1, 2*i+2)
+    // Build internal nodes bottom-up (heap layout: root at 0, children at 2*i+1, 2*i+2)
     for (int64_t i = static_cast<int64_t>(MERKLE_SLOTS) - 2; i >= 0; i--) {
         tree[static_cast<size_t>(i)] = tree[static_cast<size_t>(2*i+1)] ^ tree[static_cast<size_t>(2*i+2)];
     }
@@ -115,11 +116,10 @@ std::vector<uint16_t> find_differing_slots(
     const MerkleTree& remote)
 {
     std::vector<uint16_t> diff;
-    // Recursive helper: compare node at index i
     // Uses a stack for iteration to avoid recursion depth issues
     struct Frame { size_t idx; };
     std::vector<Frame> stack;
-    stack.push_back({MERKLE_TREE_NODES - 1}); // start at root
+    stack.push_back({0}); // start at root (standard heap: root at 0)
     while (!stack.empty()) {
         Frame f = stack.back();
         stack.pop_back();

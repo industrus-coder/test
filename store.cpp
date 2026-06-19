@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "cmd.h"
 #include "cluster.h"
@@ -80,11 +81,9 @@ VClockCmp compare_vclock(
     return VClockCmp::CONCURRENT;
 }
 
-static str serialize_for_lww(const ValueEntry& entry) {
+static str serialize_value_for_lww(const ValueEntry& entry) {
     str out;
-    // Include type
     out += static_cast<char>(entry.type);
-    // Include serialized value
     switch (entry.type) {
         case Type::STRING:
             out += std::get<str>(entry.value);
@@ -138,11 +137,6 @@ static str serialize_for_lww(const ValueEntry& entry) {
         case Type::TOMBSTONE:
             break;
     }
-    // Include VecClk deterministically
-    std::vector<std::pair<uint64_t, counter>> vclock(entry.VecClk.begin(), entry.VecClk.end());
-    std::sort(vclock.begin(), vclock.end());
-    for (const auto& [id, cnt] : vclock)
-        out += std::to_string(id) + ':' + std::to_string(cnt) + ',';
     return out;
 }
 
@@ -168,9 +162,11 @@ void store_bump_vclock(const Key& key) {
 
 void store_set(const Key& key, ValueEntry&& entry) {
     if (!g_replication_mode) {
-        auto it = STORE.find(key);
-        if (it != STORE.end())
-            entry.VecClk = it->second.VecClk;
+        if (entry.VecClk.empty()) {
+            auto it = STORE.find(key);
+            if (it != STORE.end())
+                entry.VecClk = it->second.VecClk;
+        }
         entry.VecClk[self_node.id]++;
     } else if (!entry.VecClk.empty()) {
         auto it = STORE.find(key);
@@ -178,9 +174,9 @@ void store_set(const Key& key, ValueEntry&& entry) {
             auto cmp = compare_vclock(entry.VecClk, it->second.VecClk);
             if (cmp == VClockCmp::OLDER) return;
             if (cmp == VClockCmp::CONCURRENT) {
-                // Deterministic LWW tiebreak: lexicographically larger serialized value wins
-                str local_data = serialize_for_lww(it->second);
-                str incoming_data = serialize_for_lww(entry);
+                // Deterministic LWW tiebreak: value-only comparison (no VecClk)
+                str local_data = serialize_value_for_lww(it->second);
+                str incoming_data = serialize_value_for_lww(entry);
                 if (local_data >= incoming_data) return;
             }
         }
@@ -293,6 +289,18 @@ str serialize_entry(const Key& key, const ValueEntry& entry) {
         case Type::TOMBSTONE: {
             COMMAND cmd{commandType::DEL, {key}};
             result = RESP::serialize_command(cmd);
+            // Append VCLOCK so the deletion's causal history is preserved during anti-entropy
+            if (!entry.VecClk.empty()) {
+                TOKENS t;
+                t.push_back("VCLOCK");
+                t.push_back(key);
+                t.push_back(std::to_string(entry.VecClk.size()));
+                for (const auto& [nid, cnt] : entry.VecClk) {
+                    t.push_back(std::to_string(nid));
+                    t.push_back(std::to_string(cnt));
+                }
+                result += RESP::array(t);
+            }
             break;
         }
         default:
@@ -344,21 +352,26 @@ void expire_sweep() {
     }
 }
 
+void ensure_data_dir() {
+    mkdir("data", 0755);
+}
+
 void openAOF() {
     if (AOF_FILE.is_open() && AOF_FD >= 0)
         return;
+    ensure_data_dir();
     AOF_FILE.open(
-        "append_only.aof",
+        "data/append_only.aof",
         std::ios::binary | std::ios::app
     );
     if (AOF_FILE.is_open()) {
-        AOF_FD = ::open("append_only.aof", O_WRONLY | O_APPEND);
+        AOF_FD = ::open("data/append_only.aof", O_WRONLY | O_APPEND);
     }
 }
 
 void fetchAOF() {
     std::ifstream file(
-        "append_only.aof",
+        "data/append_only.aof",
         std::ios::binary
     );
 
@@ -388,12 +401,15 @@ void fetchAOF() {
 }
 
 void appendAOF(strv raw_cmd) {
+    if (!AOF_FILE.is_open()) return;
     AOF_BUFFER.append(raw_cmd);
 }
 
 void flushAOF() {
-    if (!AOF_FILE.is_open())
+    if (!AOF_FILE.is_open()) {
+        AOF_BUFFER.clear();
         return;
+    }
 
     if (AOF_BUFFER.empty())
         return;
@@ -432,7 +448,8 @@ void rewriteAOF() {
     flushAOF();
     if (AOF_FILE.is_open()) AOF_FILE.close();
 
-    std::ofstream tmp("append_only.aof.tmp", std::ios::binary);
+    ensure_data_dir();
+    std::ofstream tmp("data/append_only.aof.tmp", std::ios::binary);
     if (!tmp.is_open()) {
         std::cerr << "[AOF] Failed to open temp file for rewrite" << std::endl;
         openAOF();
@@ -464,9 +481,9 @@ void rewriteAOF() {
     tmp.flush();
     tmp.close();
 
-    if (std::rename("append_only.aof.tmp", "append_only.aof") != 0) {
+    if (std::rename("data/append_only.aof.tmp", "data/append_only.aof") != 0) {
         std::cerr << "[AOF] Rewrite rename failed" << std::endl;
-        std::remove("append_only.aof.tmp");
+        std::remove("data/append_only.aof.tmp");
     }
 
     openAOF();
