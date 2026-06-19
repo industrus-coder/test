@@ -196,7 +196,7 @@ namespace BIN {
     };
 
     std::string serialize(const Frame&);
-    bool parse(strv buffer, Frame& out);
+    bool parse(str& buffer, Frame& out);
 
     uint32_t calculate_checksum(const FrameHeader& header, const std::string& payload);
 

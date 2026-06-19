@@ -227,7 +227,7 @@ std::string encode_gossip_payload() {
     // Shuffle and pick up to 4 (3 peers + self)
     static std::mt19937 rng(std::random_device{}());
     std::shuffle(candidates.begin() + 1, candidates.end(), rng);
-    size_t count = std::min(candidates.size(), size_t(GOSSIP_FANOUT + 1)); // +1 for self
+    uint32_t count = static_cast<uint32_t>(std::min(candidates.size(), size_t(GOSSIP_FANOUT + 1))); // +1 for self
 
     std::string payload;
     payload.append(reinterpret_cast<const char*>(&count), sizeof(uint32_t));

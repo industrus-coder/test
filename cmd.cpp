@@ -11,8 +11,6 @@
 #include "cluster.h"
 #include "network.h"
 
-#include "network.h"
-
 CMD_MAP cmd_map;
 
 static int64_t now_ms() {
@@ -21,55 +19,9 @@ static int64_t now_ms() {
     ).count();
 }
 
-static int64_t parse_expiry(const TOKENS &args, size_t &idx) {
-    while (idx < args.size()) {
-        if (args[idx] == "EX" && idx + 1 < args.size()) {
-            int64_t sec;
-            auto [p, ec] = std::from_chars(args[idx + 1].data(), args[idx + 1].data() + args[idx + 1].size(), sec);
-            if (ec == std::errc()) {
-                idx += 2;
-                return now_ms() + sec * 1000;
-            }
-        }
-        if (args[idx] == "PX" && idx + 1 < args.size()) {
-            int64_t ms;
-            auto [p, ec] = std::from_chars(args[idx + 1].data(), args[idx + 1].data() + args[idx + 1].size(), ms);
-            if (ec == std::errc()) {
-                idx += 2;
-                return now_ms() + ms;
-            }
-        }
-        if (args[idx] == "EXAT" && idx + 1 < args.size()) {
-            int64_t ts;
-            auto [p, ec] = std::from_chars(args[idx + 1].data(), args[idx + 1].data() + args[idx + 1].size(), ts);
-            if (ec == std::errc()) {
-                idx += 2;
-                return ts * 1000;
-            }
-        }
-        if (args[idx] == "PXAT" && idx + 1 < args.size()) {
-            int64_t ts;
-            auto [p, ec] = std::from_chars(args[idx + 1].data(), args[idx + 1].data() + args[idx + 1].size(), ts);
-            if (ec == std::errc()) {
-                idx += 2;
-                return ts;
-            }
-        }
-        break;
-    }
-    return -1;
-}
-
 static bool parse_int(const str &s, int64_t &val) {
     auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), val);
     return ec == std::errc();
-}
-
-static str serialize_cmd(commandType type, const TOKENS &args) {
-    TOKENS tokens;
-    tokens.push_back(command_to_string(type));
-    tokens.insert(tokens.end(), args.begin(), args.end());
-    return RESP::array(tokens);
 }
 
 // ── String handlers ──
@@ -165,7 +117,7 @@ str handle_keys(const TOKENS &args) {
     str pattern = args.empty() ? "*" : args[0];
     bool match_all = (pattern == "*");
     TOKENS res;
-    for (const auto& [key, _] : STORE) {
+    for (const auto& key : store_keys()) {
         if (match_all || key == pattern)
             res.push_back(RESP::bulk_string(key));
     }
@@ -177,13 +129,12 @@ str handle_rename(const TOKENS &args) {
     if (args[0] == args[1]) return RESP::ok();
     ValueEntry *entry = store_get(args[0]);
     if (!entry) return RESP::error("no such key");
-    store_apply_tombstone(args[1]);
     ValueEntry ne;
     ne.type = entry->type;
     ne.value = entry->value;
     ne.expiry_ms = entry->expiry_ms;
-    store_set(args[1], std::move(ne));
     store_del(args[0]);
+    store_set(args[1], std::move(ne));
     return RESP::ok();
 }
 
@@ -1494,13 +1445,7 @@ str handle_lset(const TOKENS &args) {
 
 // ── Replication stubs ──
 
-str handle_replconf(const TOKENS &args) {
-    return RESP::ok();
-}
-
-str handle_slaveof(const TOKENS &args) {
-    return RESP::ok();
-}
+// Removed replconf and slaveof
 
 str handle_vclock(const TOKENS &args) {
     // VCLOCK <key> <vc_count> <node_id1> <counter1> ...
@@ -1641,8 +1586,6 @@ void init_cmd_map() {
     cmd_map[commandType::PING] = handle_ping;
     cmd_map[commandType::CLUSTER] = handle_cluster;
     cmd_map[commandType::CONFIG] = handle_config;
-    cmd_map[commandType::REPLCONF] = handle_replconf;
-    cmd_map[commandType::SLAVEOF] = handle_slaveof;
     cmd_map[commandType::VCLOCK] = handle_vclock;
     cmd_map[commandType::BGREWRITEAOF] = handle_bgrewriteaof;
     cmd_map[commandType::UNKNOWN] = handle_unknown;

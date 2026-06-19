@@ -332,7 +332,7 @@ namespace BIN {
         return serialized_data;
     }
 
-    bool parse(strv buffer, Frame& out) {
+    bool parse(str& buffer, Frame& out) {
         if (buffer.size() < sizeof(FrameHeader)) return false;
 
         std::memcpy(&out.header, buffer.data(), sizeof(FrameHeader));
@@ -348,6 +348,7 @@ namespace BIN {
         // Now the checksum validation will work correctly.
         if (calculate_checksum(out.header, out.payload) != out.header.checksum) return false;
 
+        buffer.erase(0, sizeof(FrameHeader) + out.header.payload_len);
         return true;
     }
 }

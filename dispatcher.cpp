@@ -3,6 +3,7 @@
 #include "config.h"
 #include "cmd.h"
 #include "store.h"
+#include "network.h"
 #include <chrono>
 #include <sys/epoll.h>
 
@@ -63,6 +64,18 @@ static bool queue_replica(const str& raw_cmd, const std::vector<NodeID>& replica
         if (r.id != self_node.id)
             ids.push_back(r.id);
     if (ids.empty()) return false;
+
+    // Only defer if at least one peer is actually connected
+    bool any_connected = false;
+    for (auto id : ids) {
+        auto pit = peers_by_node_id.find(id);
+        if (pit != peers_by_node_id.end() && pit->second.fd >= 0) {
+            any_connected = true;
+            break;
+        }
+    }
+    if (!any_connected) return false;
+
     str payload = raw_cmd + vclock_extra;
     replica_queue.push_back({std::move(payload), std::move(ids), client_fd, deferred_response});
     return true;

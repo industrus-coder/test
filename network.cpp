@@ -22,7 +22,7 @@
 #include "merkle.h"
 
 constexpr size_t WRITE_BUF_BACKPRESSURE_THRESHOLD = 1024 * 1024;
-constexpr int CLIENT_IDLE_TIMEOUT_MS = 300000;  // 5 minutes
+constexpr int CLIENT_IDLE_TIMEOUT_MS = 300000; // 5 minutes
 constexpr int MAX_CLIENTS = 10000;
 
 static void set_tcp_keepalive(int fd) {
@@ -52,7 +52,7 @@ void init_server(str port) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons(std::stoi(port));
     addr.sin_addr.s_addr = INADDR_ANY;
-    auto BIND = bind(server_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+    auto BIND = bind(server_fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr));
     if (BIND < 0) {
         std::perror("Bind failed");
         exit(1);
@@ -79,6 +79,7 @@ void mod_epoll(int fd, uint32_t events) {
 
 void close_client(int fd) {
     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+    std::cout << "[DREDIS]: Closing Client-> fd: " << fd << std::endl;
     close(fd);
     clients.erase(fd);
 }
@@ -110,10 +111,11 @@ void accept_new_clients() {
     }
 }
 
-bool handle_read(Client& c) {
+bool handle_read(Client &c) {
     char buf[4096];
-    ssize_t n = read(c.fd, buf, sizeof(buf));
 
+
+    ssize_t n = read(c.fd, buf, sizeof(buf));
     if (n <= 0) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             return true;
@@ -140,7 +142,7 @@ bool handle_read(Client& c) {
                 }
 
                 std::cout << "\033[33m[DRedis] peer connection promoted (fd: " << c.fd << ")\033[0m" << std::endl;
-                auto& peer = peers_by_node_id[sender_id];
+                auto &peer = peers_by_node_id[sender_id];
                 peer.fd = c.fd;
                 peer.write_buf = std::move(c.write_buf);
                 peer.read_buf = std::move(c.parser.buffer);
@@ -148,7 +150,6 @@ bool handle_read(Client& c) {
                 peer.retry_at = 0;
                 fd_to_peer_id[c.fd] = sender_id;
                 clients.erase(c.fd);
-                peer.read_buf.erase(0, sizeof(BIN::FrameHeader) + frame.header.payload_len);
                 process_bin_frame(frame, sender_id);
 
                 if (peer.needs_full_sync) {
@@ -196,7 +197,7 @@ bool handle_read(Client& c) {
     return true;
 }
 
-bool handle_write(Client& c) {
+bool handle_write(Client &c) {
     ssize_t n = send(c.fd, c.write_buf.data(), c.write_buf.size(), MSG_NOSIGNAL);
 
     if (n < 0) {
@@ -221,13 +222,13 @@ bool handle_write(Client& c) {
     return true;
 }
 
-PeerConnection* get_or_connect(uint64_t node_id, const str& ip, uint16_t port) {
+PeerConnection *get_or_connect(uint64_t node_id, const str &ip, uint16_t port) {
     auto it = peers_by_node_id.find(node_id);
     if (it != peers_by_node_id.end() && it->second.fd >= 0)
         return &it->second;
 
     // Ensure an entry exists so reconnect_peers() can track backoff.
-    auto& peer = peers_by_node_id[node_id];
+    auto &peer = peers_by_node_id[node_id];
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -244,7 +245,7 @@ PeerConnection* get_or_connect(uint64_t node_id, const str& ip, uint16_t port) {
     addr.sin_port = htons(port);
     inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
 
-    int rc = connect(fd, (struct sockaddr*)&addr, sizeof(addr));
+    int rc = connect(fd, (struct sockaddr *) &addr, sizeof(addr));
     if (rc < 0 && errno != EINPROGRESS) {
         close(fd);
         peer.fd = -1;
@@ -264,7 +265,7 @@ PeerConnection* get_or_connect(uint64_t node_id, const str& ip, uint16_t port) {
     return &peer;
 }
 
-void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
+void process_bin_frame(const BIN::Frame &frame, uint64_t peer_node_id) {
     switch (static_cast<BIN::FrameType>(frame.header.msg_type)) {
         case BIN::FrameType::PING: {
             NodeID sender;
@@ -276,16 +277,20 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
         }
         case BIN::FrameType::CLUSTER_JOIN: {
             // Payload: my_id(8) + ip_len(4) + ip(ip_len) + port(2) + generation(8)
-            if (frame.payload.size() < 8+4+2+8) break;
+            if (frame.payload.size() < 8 + 4 + 2 + 8) break;
             size_t off = 0;
             uint64_t sid;
-            memcpy(&sid, frame.payload.data() + off, sizeof(sid)); off += sizeof(sid);
+            memcpy(&sid, frame.payload.data() + off, sizeof(sid));
+            off += sizeof(sid);
             uint32_t ip_len;
-            memcpy(&ip_len, frame.payload.data() + off, sizeof(ip_len)); off += sizeof(ip_len);
+            memcpy(&ip_len, frame.payload.data() + off, sizeof(ip_len));
+            off += sizeof(ip_len);
             if (off + ip_len + 2 + 8 > frame.payload.size()) break;
-            str ip(frame.payload.data() + off, ip_len); off += ip_len;
+            str ip(frame.payload.data() + off, ip_len);
+            off += ip_len;
             uint16_t rport;
-            memcpy(&rport, frame.payload.data() + off, sizeof(rport)); off += sizeof(rport);
+            memcpy(&rport, frame.payload.data() + off, sizeof(rport));
+            off += sizeof(rport);
             uint64_t gen;
             memcpy(&gen, frame.payload.data() + off, sizeof(gen));
 
@@ -295,7 +300,7 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
             if (sid != peer_node_id) {
                 auto pit = peers_by_node_id.find(peer_node_id);
                 if (pit != peers_by_node_id.end()) {
-                    auto& peer = peers_by_node_id[sid];
+                    auto &peer = peers_by_node_id[sid];
                     peer = std::move(pit->second);
                     fd_to_peer_id[peer.fd] = sid;
                     peers_by_node_id.erase(pit);
@@ -310,12 +315,12 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
 
             // Send CLUSTER_JOIN_ACK with our identity
             str ack_payload;
-            ack_payload.append(reinterpret_cast<const char*>(&self_node.id), sizeof(self_node.id));
+            ack_payload.append(reinterpret_cast<const char *>(&self_node.id), sizeof(self_node.id));
             uint32_t my_ip_len = static_cast<uint32_t>(self_node.ip.size());
-            ack_payload.append(reinterpret_cast<const char*>(&my_ip_len), sizeof(my_ip_len));
+            ack_payload.append(reinterpret_cast<const char *>(&my_ip_len), sizeof(my_ip_len));
             ack_payload += self_node.ip;
-            ack_payload.append(reinterpret_cast<const char*>(&self_node.port), sizeof(self_node.port));
-            ack_payload.append(reinterpret_cast<const char*>(&self_node.generation), sizeof(self_node.generation));
+            ack_payload.append(reinterpret_cast<const char *>(&self_node.port), sizeof(self_node.port));
+            ack_payload.append(reinterpret_cast<const char *>(&self_node.generation), sizeof(self_node.generation));
 
             static uint64_t ack_id = 1;
             BIN::Frame ack;
@@ -339,16 +344,20 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
             break;
         }
         case BIN::FrameType::CLUSTER_JOIN_ACK: {
-            if (frame.payload.size() < 8+4+2+8) break;
+            if (frame.payload.size() < 8 + 4 + 2 + 8) break;
             size_t off = 0;
             uint64_t sid;
-            memcpy(&sid, frame.payload.data() + off, sizeof(sid)); off += sizeof(sid);
+            memcpy(&sid, frame.payload.data() + off, sizeof(sid));
+            off += sizeof(sid);
             uint32_t ip_len;
-            memcpy(&ip_len, frame.payload.data() + off, sizeof(ip_len)); off += sizeof(ip_len);
+            memcpy(&ip_len, frame.payload.data() + off, sizeof(ip_len));
+            off += sizeof(ip_len);
             if (off + ip_len + 2 + 8 > frame.payload.size()) break;
-            str ip(frame.payload.data() + off, ip_len); off += ip_len;
+            str ip(frame.payload.data() + off, ip_len);
+            off += ip_len;
             uint16_t rport;
-            memcpy(&rport, frame.payload.data() + off, sizeof(rport)); off += sizeof(rport);
+            memcpy(&rport, frame.payload.data() + off, sizeof(rport));
+            off += sizeof(rport);
             uint64_t gen;
             memcpy(&gen, frame.payload.data() + off, sizeof(gen));
 
@@ -356,7 +365,7 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
             if (sid != peer_node_id) {
                 auto it = peers_by_node_id.find(peer_node_id);
                 if (it != peers_by_node_id.end()) {
-                    auto& peer = peers_by_node_id[sid];
+                    auto &peer = peers_by_node_id[sid];
                     peer = std::move(it->second);
                     fd_to_peer_id[peer.fd] = sid;
                     peers_by_node_id.erase(it);
@@ -464,7 +473,7 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
             for (size_t i = 0; i < keys.size(); i += CHUNK_SIZE) {
                 str payload;
                 for (size_t j = i; j < i + CHUNK_SIZE && j < keys.size(); j++) {
-                    auto* entry = store_get(keys[j]);
+                    auto *entry = store_get(keys[j]);
                     if (!entry) continue;
                     payload += serialize_entry(keys[j], *entry);
                 }
@@ -507,11 +516,11 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
             if (diff.empty()) break;
 
             str payload;
-            payload.append(reinterpret_cast<const char*>(&remote.version), sizeof(remote.version));
+            payload.append(reinterpret_cast<const char *>(&remote.version), sizeof(remote.version));
             uint16_t n = static_cast<uint16_t>(diff.size());
-            payload.append(reinterpret_cast<const char*>(&n), sizeof(n));
-            for (auto s : diff) {
-                payload.append(reinterpret_cast<const char*>(&s), sizeof(s));
+            payload.append(reinterpret_cast<const char *>(&n), sizeof(n));
+            for (auto s: diff) {
+                payload.append(reinterpret_cast<const char *>(&s), sizeof(s));
             }
             static uint64_t req_id = 1;
             BIN::Frame req;
@@ -580,18 +589,18 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
 
             str response = execute_command(cmd);
             std::unordered_map<uint64_t, counter> vclock;
-            auto* entry = store_get(cmd.args[0]);
+            auto *entry = store_get(cmd.args[0]);
             if (entry) vclock = entry->VecClk;
 
             str payload;
             uint32_t resp_len = static_cast<uint32_t>(response.size());
-            payload.append(reinterpret_cast<const char*>(&resp_len), sizeof(resp_len));
+            payload.append(reinterpret_cast<const char *>(&resp_len), sizeof(resp_len));
             payload += response;
             uint32_t vc_count = static_cast<uint32_t>(vclock.size());
-            payload.append(reinterpret_cast<const char*>(&vc_count), sizeof(vc_count));
-            for (const auto& [id, cnt] : vclock) {
-                payload.append(reinterpret_cast<const char*>(&id), sizeof(id));
-                payload.append(reinterpret_cast<const char*>(&cnt), sizeof(cnt));
+            payload.append(reinterpret_cast<const char *>(&vc_count), sizeof(vc_count));
+            for (const auto &[id, cnt]: vclock) {
+                payload.append(reinterpret_cast<const char *>(&id), sizeof(id));
+                payload.append(reinterpret_cast<const char *>(&cnt), sizeof(cnt));
             }
 
             BIN::Frame resp;
@@ -628,13 +637,15 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
             std::unordered_map<uint64_t, counter> vclock;
             for (uint32_t i = 0; i < vc_count && off + 16 <= frame.payload.size(); i++) {
                 uint64_t id, cnt;
-                memcpy(&id, frame.payload.data() + off, sizeof(id)); off += sizeof(id);
-                memcpy(&cnt, frame.payload.data() + off, sizeof(cnt)); off += sizeof(cnt);
+                memcpy(&id, frame.payload.data() + off, sizeof(id));
+                off += sizeof(id);
+                memcpy(&cnt, frame.payload.data() + off, sizeof(cnt));
+                off += sizeof(cnt);
                 vclock[id] = cnt;
             }
             auto rit = pending_reads.find(frame.header.msg_id);
             if (rit == pending_reads.end()) break;
-            auto& pr = rit->second;
+            auto &pr = rit->second;
             auto cmp = compare_vclock(vclock, pr.best_vclock);
             if (cmp == VClockCmp::NEWER) {
                 pr.best_response = response;
@@ -643,12 +654,12 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
                 if (!pr.key.empty()) {
                     auto local_cmp = compare_vclock(vclock, pr.local_vclock);
                     if (local_cmp == VClockCmp::NEWER) {
-                        auto* existing = store_get(pr.key);
+                        auto *existing = store_get(pr.key);
                         if (existing && existing->type == Type::STRING && !response.empty() && response[0] == '$') {
                             auto cr = response.find("\r\n");
                             if (cr != str::npos && cr >= 1) {
                                 str len_str = response.substr(1, cr - 1);
-                                char* end = nullptr;
+                                char *end = nullptr;
                                 long long val_len = std::strtoll(len_str.c_str(), &end, 10);
                                 if (end != len_str.c_str() && val_len >= 0) {
                                     str val = response.substr(cr + 2, static_cast<size_t>(val_len));
@@ -667,8 +678,8 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
                 }
             } else if (cmp == VClockCmp::CONCURRENT) {
                 uint64_t sum_in = 0, sum_best = 0;
-                for (const auto& [_, c] : vclock) sum_in += c;
-                for (const auto& [_, c] : pr.best_vclock) sum_best += c;
+                for (const auto &[_, c]: vclock) sum_in += c;
+                for (const auto &[_, c]: pr.best_vclock) sum_best += c;
                 if (sum_in > sum_best) {
                     pr.best_response = response;
                     pr.best_vclock = vclock;
@@ -693,14 +704,17 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
             if (pit == gather_parent.end()) break;
             uint64_t gather_id = pit->second;
             auto kit = gather_keys.find(frame.header.msg_id);
-            if (kit == gather_keys.end()) { gather_parent.erase(pit); break; }
+            if (kit == gather_keys.end()) {
+                gather_parent.erase(pit);
+                break;
+            }
             auto key_indices = kit->second;
             gather_parent.erase(pit);
             gather_keys.erase(kit);
 
             auto git = pending_gathers.find(gather_id);
             if (git == pending_gathers.end()) break;
-            auto& pg = git->second;
+            auto &pg = git->second;
             pg.received++;
 
             if (pg.cmd_type == commandType::MGET) {
@@ -714,7 +728,7 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
                 // +OK responses — nothing to accumulate
             } else {
                 auto elements = split_resp_responses(frame.payload);
-                for (auto& elem : elements) {
+                for (auto &elem: elements) {
                     if (!elem.empty() && elem[0] == ':')
                         pg.accumulated += std::atol(elem.c_str() + 1);
                 }
@@ -725,7 +739,7 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
                 if (pg.cmd_type == commandType::MGET) {
                     TOKENS resp_parts;
                     resp_parts.reserve(pg.parts.size());
-                    for (auto& p : pg.parts)
+                    for (auto &p: pg.parts)
                         resp_parts.push_back(std::move(p));
                     final_resp = RESP::array_raw(resp_parts);
                 } else if (pg.cmd_type == commandType::MSET) {
@@ -751,7 +765,7 @@ void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id) {
     }
 }
 
-void handle_peer_read(PeerConnection& peer, uint64_t peer_node_id) {
+void handle_peer_read(PeerConnection &peer, uint64_t peer_node_id) {
     char buf[65536];
     ssize_t n = read(peer.fd, buf, sizeof(buf));
     if (n > 0) {
@@ -774,14 +788,14 @@ void handle_peer_read(PeerConnection& peer, uint64_t peer_node_id) {
             // Real ID differs from the key we looked up — migrate the peer entry
             auto pit = peers_by_node_id.find(peer_node_id);
             if (pit != peers_by_node_id.end()) {
-                auto& migrated = peers_by_node_id[real_id];
+                auto &migrated = peers_by_node_id[real_id];
                 migrated = std::move(pit->second);
                 fd_to_peer_id[migrated.fd] = real_id;
                 peers_by_node_id.erase(pit);
                 // Re-lookup: peer reference is now dangling, get fresh one
                 auto np = peers_by_node_id.find(real_id);
                 if (np == peers_by_node_id.end()) break;
-                PeerConnection& fresh_peer = np->second;
+                PeerConnection &fresh_peer = np->second;
                 process_bin_frame(frame, real_id);
                 while (BIN::parse(fresh_peer.read_buf, frame)) {
                     process_bin_frame(frame, real_id);
@@ -800,7 +814,7 @@ void handle_peer_read(PeerConnection& peer, uint64_t peer_node_id) {
     mod_epoll(peer.fd, flags);
 }
 
-void handle_peer_write(PeerConnection& peer) {
+void handle_peer_write(PeerConnection &peer) {
     if (peer.write_buf.empty()) {
         // EPOLLOUT with no data to write — likely connect completion.
         // Check for deferred connect errors (ECONNREFUSED etc.).
@@ -852,7 +866,7 @@ void handle_peer_write(PeerConnection& peer) {
         return;
     }
     peer.write_buf.erase(0, n);
-    peer.retry_count = 0;  // Connection confirmed alive
+    peer.retry_count = 0; // Connection confirmed alive
 
     uint32_t flags = EPOLLIN;
     if (!peer.write_buf.empty()) flags |= EPOLLOUT;
@@ -862,7 +876,7 @@ void handle_peer_write(PeerConnection& peer) {
 void flush_replica_queue() {
     static uint64_t msg_id = 1;
     while (!replica_queue.empty()) {
-        auto& op = replica_queue.front();
+        auto &op = replica_queue.front();
         BIN::Frame frame;
         frame.header = {
             .magic = BIN::MAGIC,
@@ -885,7 +899,7 @@ void flush_replica_queue() {
             };
         }
 
-        for (auto id : op.target_ids) {
+        for (auto id: op.target_ids) {
             auto it = peers_by_node_id.find(id);
             if (it != peers_by_node_id.end() && it->second.fd >= 0)
                 it->second.write_buf += serialized;
@@ -896,17 +910,17 @@ void flush_replica_queue() {
 
 static std::vector<NodeID> g_seed_addresses;
 
-void set_seed_addresses(const std::vector<NodeID>& seeds) {
+void set_seed_addresses(const std::vector<NodeID> &seeds) {
     g_seed_addresses = seeds;
 }
 
 void connect_to_peers() {
-    for (const auto& node : get_all_nodes()) {
+    for (const auto &node: get_all_nodes()) {
         if (node.id > self_node.id)
             get_or_connect(node.id, node.ip, node.port);
     }
     // Connect to seed addresses regardless of ID ordering
-    for (const auto& seed : g_seed_addresses) {
+    for (const auto &seed: g_seed_addresses) {
         if (seed.id == self_node.id) continue;
         get_or_connect(seed.id, seed.ip, seed.port);
     }
@@ -927,7 +941,7 @@ void send_heartbeats() {
     };
     frame.payload = std::move(gossip);
     auto serialized = BIN::serialize(frame);
-    for (auto& [nid, peer] : peers_by_node_id) {
+    for (auto &[nid, peer]: peers_by_node_id) {
         if (nid != self_node.id && peer.fd >= 0) {
             bool was_empty = peer.write_buf.empty();
             peer.write_buf += serialized;
@@ -937,19 +951,18 @@ void send_heartbeats() {
             }
         }
     }
-
 }
 
 void reconnect_peers() {
     auto now = current_time_ms();
-    for (auto& [nid, peer] : peers_by_node_id) {
+    for (auto &[nid, peer]: peers_by_node_id) {
         if (nid <= self_node.id) continue;
         if (peer.fd >= 0) continue;
         if (now < peer.retry_at) continue;
 
         auto it = cluster_state.find(NodeID{nid, "", 0});
         if (it == cluster_state.end()) continue;
-        auto& node = it->first;
+        auto &node = it->first;
 
         get_or_connect(nid, node.ip, node.port);
     }
@@ -969,7 +982,7 @@ void run_background_tasks() {
         };
         bye.payload = std::move(gossip);
         auto serialized = BIN::serialize(bye);
-        for (auto& [nid, peer] : peers_by_node_id) {
+        for (auto &[nid, peer]: peers_by_node_id) {
             if (peer.fd >= 0) {
                 ::write(peer.fd, serialized.data(), serialized.size());
             }
@@ -991,7 +1004,7 @@ void run_background_tasks() {
     flush_replica_queue();
 
     // Timeout pending writes after 10s — return error (never ack uncommitted writes)
-    for (auto it = pending_writes.begin(); it != pending_writes.end(); ) {
+    for (auto it = pending_writes.begin(); it != pending_writes.end();) {
         if (now - it->second.created_at >= 10000) {
             auto cit = clients.find(it->second.client_fd);
             if (cit != clients.end()) {
@@ -1010,7 +1023,7 @@ void run_background_tasks() {
     }
 
     // Timeout pending reads after 5s — respond with best result
-    for (auto it = pending_reads.begin(); it != pending_reads.end(); ) {
+    for (auto it = pending_reads.begin(); it != pending_reads.end();) {
         if (now - it->second.created_at >= 5000) {
             auto cit = clients.find(it->second.client_fd);
             if (cit != clients.end()) {
@@ -1029,13 +1042,13 @@ void run_background_tasks() {
     }
 
     // Timeout pending gathers after 5s — respond with partial result
-    for (auto it = pending_gathers.begin(); it != pending_gathers.end(); ) {
+    for (auto it = pending_gathers.begin(); it != pending_gathers.end();) {
         if (now - it->second.created_at >= 5000) {
             str partial;
             if (it->second.cmd_type == commandType::MGET) {
                 TOKENS resp_parts;
                 resp_parts.reserve(it->second.parts.size());
-                for (auto& p : it->second.parts) {
+                for (auto &p: it->second.parts) {
                     if (p.empty()) resp_parts.push_back(RESP::null_bulk_string());
                     else resp_parts.push_back(std::move(p));
                 }
@@ -1062,22 +1075,21 @@ void run_background_tasks() {
     }
 
     // Close idle clients
-    for (auto it = clients.begin(); it != clients.end(); ) {
-        if (now - it->second.last_active_ms >= CLIENT_IDLE_TIMEOUT_MS) {
-            it->second.idle_timed_out = true;
-            close_client(it->first);
-            it = clients.begin(); // iterator invalidated
-        } else {
-            ++it;
+    std::vector<int> idle_fds;
+    for (auto& [fd, c] : clients) {
+        if (now - c.last_active_ms >= CLIENT_IDLE_TIMEOUT_MS) {
+            c.idle_timed_out = true;
+            idle_fds.push_back(fd);
         }
     }
+    for (int fd : idle_fds) close_client(fd);
 
     flushAOF();
     expire_sweep();
     reconnect_peers();
 
     // Connect to new peers discovered via gossip
-    for (const auto& [node, status] : cluster_state) {
+    for (const auto &[node, status]: cluster_state) {
         if (node.id <= self_node.id) continue;
         if (status != NodeStatus::ALIVE) continue;
         if (peers_by_node_id.find(node.id) != peers_by_node_id.end()) continue;
@@ -1092,7 +1104,7 @@ void run_background_tasks() {
     if (now - last_timeout_check >= config().gossip_interval_ms) {
         last_timeout_check = now;
         std::unordered_set<uint64_t> connected;
-        for (auto& [nid, peer] : peers_by_node_id) {
+        for (auto &[nid, peer]: peers_by_node_id) {
             if (peer.fd >= 0) connected.insert(nid);
         }
         check_timeouts(&connected);
@@ -1113,7 +1125,7 @@ void run_background_tasks() {
         };
         m_frame.payload = std::move(m_payload);
         auto serialized = BIN::serialize(m_frame);
-        for (auto& [nid, peer] : peers_by_node_id) {
+        for (auto &[nid, peer]: peers_by_node_id) {
             if (nid == self_node.id || peer.fd < 0) continue;
             bool was_empty = peer.write_buf.empty();
             peer.write_buf += serialized;
@@ -1127,7 +1139,7 @@ void run_background_tasks() {
     if (now - last_tick >= 5000) {
         last_tick = now;
         tick_count++;
-        std::cout << "\033[36mtick " << tick_count << "\033[0m" << std::endl;
+        // std::cout << "\033[36mtick " << tick_count << "\033[0m" << std::endl;
     }
 }
 
@@ -1146,7 +1158,7 @@ void run_background_tasks() {
 
             auto cit = clients.find(fd);
             if (cit != clients.end()) {
-                Client& c = cit->second;
+                Client &c = cit->second;
                 bool client_alive = true;
                 if (revents & EPOLLIN)
                     client_alive = handle_read(c);

@@ -8,7 +8,6 @@
 #include "cmd.h"
 #include "store.h"
 #include "config.h"
-#include "benchmarks.h"
 
 static std::vector<NodeID> parse_seeds() {
     std::vector<NodeID> seeds;
@@ -68,8 +67,8 @@ static void configure_system() {
 
     std::string port = std::to_string(config().client_port);
     init_server(port.c_str());
-    openAOF();
-    fetchAOF();
+   // openAOF();
+   // fetchAOF();
 }
 
 static void setup_signal_handlers() {
@@ -88,9 +87,6 @@ int main() {
 
     uint64_t node_id = 0, generation = 0;
     setup_node_identity(node_id, generation);
-
-    // Uncomment to run benchmarks
-    // run_benchmarks();
 
     init_cluster_node(node_id, generation);
     setup_signal_handlers();

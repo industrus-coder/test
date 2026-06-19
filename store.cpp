@@ -20,6 +20,7 @@ std::unordered_map<Key, ValueEntry> STORE;
 
 static std::ofstream AOF_FILE;
 static int AOF_FD = -1;
+#include <fcntl.h>
 static str AOF_BUFFER;
 
 static int64_t current_time_ms() {
@@ -344,14 +345,14 @@ void expire_sweep() {
 }
 
 void openAOF() {
-    if (AOF_FILE.is_open())
+    if (AOF_FILE.is_open() && AOF_FD >= 0)
         return;
     AOF_FILE.open(
         "append_only.aof",
         std::ios::binary | std::ios::app
     );
     if (AOF_FILE.is_open()) {
-        //
+        AOF_FD = ::open("append_only.aof", O_WRONLY | O_APPEND);
     }
 }
 
@@ -372,6 +373,7 @@ void fetchAOF() {
     RESP::Parser parser;
     parser.feed(data);
 
+    g_replication_mode = true;
     COMMAND cmd;
 
     while (parser.next(cmd)) {
@@ -381,6 +383,7 @@ void fetchAOF() {
             it->second(cmd.args);
     }
 
+    g_replication_mode = false;
     parser.clear_consumed();
 }
 
@@ -402,11 +405,13 @@ void flushAOF() {
 
     if (g_aof_fsync == AOFFsync::ALWAYS) {
         AOF_FILE.flush();
+        if (AOF_FD >= 0) fdatasync(AOF_FD);
     } else if (g_aof_fsync == AOFFsync::EVERYSEC) {
         static int64_t last_fsync = 0;
         auto now = current_time_ms();
         if (now - last_fsync >= 1000) {
             AOF_FILE.flush();
+            if (AOF_FD >= 0) fdatasync(AOF_FD);
             last_fsync = now;
         }
     }
@@ -418,6 +423,7 @@ void flushAOF() {
 void closeAOF() {
     flushAOF();
 
+    if (AOF_FD >= 0) { ::close(AOF_FD); AOF_FD = -1; }
     if (AOF_FILE.is_open())
         AOF_FILE.close();
 }

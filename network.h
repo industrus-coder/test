@@ -96,7 +96,7 @@ bool handle_write(Client& c);
 void connect_to_peers();
 void set_seed_addresses(const std::vector<NodeID>& seeds);
 PeerConnection* get_or_connect(uint64_t node_id, const str& ip, uint16_t port);
-void handle_peer_read(PeerConnection& peer);
+void handle_peer_read(PeerConnection& peer, uint64_t peer_node_id);
 void handle_peer_write(PeerConnection& peer);
 void process_bin_frame(const BIN::Frame& frame, uint64_t peer_node_id);
 void send_heartbeats();
